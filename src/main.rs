@@ -1,114 +1,194 @@
-use tokio::net::TcpListener;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use clap::{Command, Arg};
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use std::time::Instant;
+use chx::{ChxClient, ChxError, server};
+use clap::{Parser, Subcommand};
 
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    mode: Option<Mode>,
+}
 
+#[derive(Subcommand, Debug)]
+enum Mode {
+    /// Runs the application in server mode
+    Server {
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        #[arg(long, default_value_t = 3800)]
+        port: u16,
+        #[arg(long, default_value_t = 2592000)]
+        expire_time: u64,
+    },
+    /// Runs the application in client mode
+    Client {
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        #[arg(long, default_value_t = 3800)]
+        port: u16,
+    },
+}
 
 #[tokio::main]
-async fn main() {
-    // Parsing command-line arguments with Clap version 4.x
-    let matches = Command::new("CHX A Lightning cache server")
-        .version("1.0.0")
-        .author("Nux Xader rsayria@gmail.com")
-        .about("In-memory key-value cache server")
-        .arg(
-            Arg::new("h")
-                .long("host")
-                .value_parser(clap::value_parser!(String))
-                .default_value("127.0.0.1")
-                .help("The host to bind the server to"),
-        )
-        .arg(
-            Arg::new("p")
-                .long("port")
-                .value_parser(clap::value_parser!(u16))
-                .default_value("3800")
-                .help("The port to bind the server to"),
-        )
-        .arg(
-            Arg::new("e")
-                .long("expire_time")
-                .value_parser(clap::value_parser!(u64))
-                .default_value("2592000")
-                .help("Expiration time for cache entries (in seconds)"),
-        )
-        .get_matches();
+async fn main() -> Result<(), ChxError> {
+    let cli = Cli::parse();
 
-    // Retrieve argument values using `get_one`
-    let host = matches.get_one::<String>("h").unwrap();
-    let port = matches.get_one::<u16>("p").unwrap();
-    let expire_time: u64 = *matches.get_one::<u64>("e").unwrap();
+    let mode = if let Some(mode) = cli.mode {
+        mode
+    } else {
+        // Default to server mode if no subcommand is provided
+        Mode::Server {
+            host: "127.0.0.1".to_string(),
+            port: 3800,
+            expire_time: 2592000,
+        }
+    };
 
-    // Change std::sync::Mutex to tokio::sync::Mutex
-    let listener = TcpListener::bind(format!("{}:{}", host, port)).await.unwrap();
-    let store: Arc<RwLock<HashMap<Vec<u8>, (Vec<u8>, Instant)>>> = Arc::new(RwLock::new(HashMap::new()));
+    match mode {
+        Mode::Server {
+            host,
+            port,
+            expire_time,
+        } => server(&host, &port, expire_time).await,
+        Mode::Client { host, port } => repl(host, port).await,
+    }
+}
 
+async fn repl(host: String, port: u16) -> Result<(), ChxError> {
+    let addr = format!("{}:{}", host, port);
+    let current_addr = addr.clone();
 
-    println!("Server listening on {}:{}", host, port);
+    // Initial connection attempt
+    let mut client_option = loop {
+        match ChxClient::connect(&current_addr).await {
+            Ok(client) => {
+                println!(
+                    "Connected to Chx server at {}. Type 'help' for commands.",
+                    current_addr
+                );
+                break Some(client);
+            }
+            Err(e) => {
+                eprintln!(
+                    "Failed to connect to {}: {}. Retrying in 3 seconds...",
+                    current_addr, e
+                );
+                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+            }
+        }
+    };
+
+    let mut rl = rustyline::DefaultEditor::new()?;
 
     loop {
-        // Menunggu koneksi dari client
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let store_clone = Arc::clone(&store);
-
-        // Menangani client secara asinkron
-        tokio::spawn(async move {
-            loop {
-                let mut buffer: [u8; 524288] = [0; 524288];
-                let n = socket.read(&mut buffer).await.unwrap();
-
-                if n == 0 {break;}
-
-                let data = &mut buffer[..n].splitn(3, |&byte| byte == 32);
-                let mut expired_key: Option<Vec<u8>> = None;
-                match data.next() {
-                    Some(action) => {
-                        match action {
-                            // GET
-                            &[71] => {
-                                let key: Vec<u8> = data.next().unwrap_or_default().trim_ascii().to_vec();
-                                if key.is_empty() {break;}
-                                if let Some((val, timestamp)) = store_clone.read().await.get(&key) {
-                                    if expire_time > 0 && timestamp.elapsed().as_secs() > expire_time {
-                                        expired_key = Some(key);
-                                        socket.write_all(&[33, 101]).await.unwrap();
-                                    } else {
-                                        let mut val_ = val.to_owned();
-                                        val_.insert(0, 62);
-                                        socket.write_all(&val_.as_slice()).await.unwrap();
-                                    }
-                                } else {
-                                    socket.write_all(&[33]).await.unwrap();
-                                }
-                            }
-                            // SET
-                            &[83] => {
-                                let key = data.next().unwrap_or_default().to_vec();
-                                let val = data.next().unwrap_or_default().trim_ascii().to_vec();
-                                if key.is_empty() || val.is_empty() {break;}
-
-                                let timestamp = Instant::now();
-                                store_clone.write().await.insert(key, (val, timestamp));
-                            }
-                            // DEL
-                            &[68] => {
-
-                            }
-                            _ => {}
-                        }
-                    }
-                    None => {}
-                }
-
-                if let Some(key) = expired_key {
-                    store_clone.write().await.remove(&key);
-                }                
+        let readline = rl.readline("chx> ");
+        let line = match readline {
+            Ok(line) => line,
+            Err(rustyline::error::ReadlineError::Eof) => {
+                println!("Ctrl-D detected. Exiting Chx client.");
+                break Ok(());
             }
+            Err(rustyline::error::ReadlineError::Interrupted) => {
+                println!("Ctrl-C detected. Exiting Chx client.");
+                break Ok(());
+            }
+            Err(e) => {
+                eprintln!("Error reading line: {:?}", e);
+                break Err(ChxError::Other(format!("Readline error: {}", e)));
+            }
+        };
 
-        });
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        rl.add_history_entry(line)?;
+
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.is_empty() {
+            continue;
+        }
+
+        let command_result = async {
+            let client = client_option.as_mut().expect("Client should be connected");
+            match parts[0].to_lowercase().as_str() {
+                "get" => {
+                    if parts.len() == 2 {
+                        let key = parts[1];
+                        match client.get(key).await {
+                            Ok(Some(value)) => println!("{}", value),
+                            Ok(None) => println!("Key not found"),
+                            Err(e) => {
+                                return Err(ChxError::Other(format!("Connection error: {}", e)));
+                            }
+                        }
+                    } else {
+                        eprintln!("Usage: GET <key>");
+                    }
+                }
+                "set" => {
+                    if parts.len() >= 3 {
+                        let key = parts[1];
+                        let value = parts[2..].join(" ");
+                        match client.set(key, &value).await {
+                            Ok(_) => println!("Key set successfully"),
+                            Err(e) => {
+                                return Err(ChxError::Other(format!("Connection error: {}", e)));
+                            }
+                        }
+                    } else {
+                        eprintln!("Usage: SET <key> <value>");
+                    }
+                }
+                "del" => {
+                    if parts.len() == 2 {
+                        let key = parts[1];
+                        match client.del(key).await {
+                            Ok(_) => println!("Key deleted successfully"),
+                            Err(e) => {
+                                return Err(ChxError::Other(format!("Connection error: {}", e)));
+                            }
+                        }
+                    } else {
+                        eprintln!("Usage: DEL <key>");
+                    }
+                }
+                "quit" | "exit" => {
+                    println!("Exiting Chx client.");
+                    return Ok(());
+                }
+                "help" => {
+                    println!("Available commands:");
+                    println!("  GET <key>        - Retrieve the value associated with a key");
+                    println!("  SET <key> <value> - Set a key-value pair");
+                    println!("  DEL <key>        - Delete a key");
+                    println!("  quit | exit      - Exit the client");
+                }
+                _ => {
+                    eprintln!("Unknown command: {}", parts[0]);
+                    eprintln!("Type 'help' for available commands.");
+                }
+            }
+            Ok(())
+        }
+        .await;
+
+        if let Err(e) = command_result {
+            eprintln!("Command error: {}. Attempting to reconnect...", e);
+            client_option = loop {
+                match ChxClient::connect(&current_addr).await {
+                    Ok(client) => {
+                        println!("Reconnected to Chx server at {}.", current_addr);
+                        break Some(client);
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Failed to reconnect to {}: {}. Retrying in 3 seconds...",
+                            current_addr, e
+                        );
+                        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                    }
+                }
+            };
+        }
     }
 }

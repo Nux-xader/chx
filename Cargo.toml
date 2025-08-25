@@ -2,10 +2,25 @@
 name = "chx"
 version = "0.1.0"
 edition = "2024"
+authors = ["CHX Team"]
+description = "High-performance key-value store library with async support and auto-expiration"
+repository = "https://github.com/Nux-xader/chx"
+keywords = ["key-value", "database", "cache"]
+categories = ["database", "caching"]
+readme = "README.md"
+
+[lib]
+name = "chx"
+path = "src/lib.rs"
+
+[[bin]]
+name = "chx"
+path = "src/main.rs"
 
 [dependencies]
 tokio = { version = "1.45.1", features = ["full"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 chrono = { version = "0.4.41", features = ["serde"] }
-clap = "4.5.40"
+clap = { version = "4.5.40", features = ["derive", "cargo"] }
+rustyline = "13.0.0"
