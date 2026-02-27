@@ -191,8 +191,8 @@ impl ChxClient {
     }
 
     pub async fn parse_response(&mut self) -> Result<String, ChxError> {
-        let mut buffer = [0u8; 1024]; // Use array instead of Vec for better performance
-        let n = self.stream.read(&mut buffer).await.map_err(|e| {
+        let mut buffer = Box::new([0u8; 65536]); // Allocated on Heap to handle large data
+        let n = self.stream.read(&mut *buffer).await.map_err(|e| {
             dbg_println!("Failed to read response: {}", e);
             ChxError::IoError(format!("Failed to read response: {}", e))
         })?;
@@ -403,8 +403,8 @@ pub async fn server(host: &str, port: u16, expire_time: u64) -> Result<(), ChxEr
 
             tokio::spawn(async move {
                 loop {
-                    let mut buffer = [0; 1048576];
-                    let n = socket.read(&mut buffer).await.unwrap();
+                    let mut buffer = Box::new([0u8; 65536]); // Allocated on Heap to prevent Stack Overflow
+                    let n = socket.read(&mut *buffer).await.unwrap();
 
                     if n == 0 {
                         break;
