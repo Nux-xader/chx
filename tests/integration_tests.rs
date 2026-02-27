@@ -18,7 +18,7 @@ async fn spawn_server_and_connect_client(expire_time: u64) -> (ChxClient, u16) {
 
     // Use tokio::spawn to run server in background
     tokio::spawn(async move {
-        server(&cloned_host, &port, expire_time).await.unwrap();
+        server(&cloned_host, port, expire_time).await.unwrap();
     });
 
     // Give a little time for server to be ready to accept connections

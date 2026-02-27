@@ -1,4 +1,4 @@
-use chx::{ChxClient, ChxError, server};
+use chx::{ChxClient, ChxError, dbg_println, server};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
@@ -48,7 +48,7 @@ async fn main() -> Result<(), ChxError> {
             host,
             port,
             expire_time,
-        } => server(&host, &port, expire_time).await,
+        } => server(&host, port, expire_time).await,
         Mode::Client { host, port } => repl(host, port).await,
     }
 }
@@ -92,7 +92,7 @@ async fn repl(host: String, port: u16) -> Result<(), ChxError> {
                 break Ok(());
             }
             Err(e) => {
-                eprintln!("Error reading line: {:?}", e);
+                dbg_println!("Error reading line: {:?}", e);
                 break Err(ChxError::Other(format!("Readline error: {}", e)));
             }
         };
@@ -117,8 +117,8 @@ async fn repl(host: String, port: u16) -> Result<(), ChxError> {
                         match client.get(key).await {
                             Ok(Some(value)) => println!("{}", value),
                             Ok(None) => println!("Key not found"),
-                            Err(e) => {
-                                return Err(ChxError::Other(format!("Connection error: {}", e)));
+                            Err(_e) => {
+                                return Err(ChxError::Other(format!("Connection error: {}", _e)));
                             }
                         }
                     } else {
@@ -131,8 +131,8 @@ async fn repl(host: String, port: u16) -> Result<(), ChxError> {
                         let value = parts[2..].join(" ");
                         match client.set(key, &value).await {
                             Ok(_) => println!("Key set successfully"),
-                            Err(e) => {
-                                return Err(ChxError::Other(format!("Connection error: {}", e)));
+                            Err(_e) => {
+                                return Err(ChxError::Other(format!("Connection error: {}", _e)));
                             }
                         }
                     } else {
@@ -144,8 +144,8 @@ async fn repl(host: String, port: u16) -> Result<(), ChxError> {
                         let key = parts[1];
                         match client.del(key).await {
                             Ok(_) => println!("Key deleted successfully"),
-                            Err(e) => {
-                                return Err(ChxError::Other(format!("Connection error: {}", e)));
+                            Err(_e) => {
+                                return Err(ChxError::Other(format!("Connection error: {}", _e)));
                             }
                         }
                     } else {
@@ -165,25 +165,26 @@ async fn repl(host: String, port: u16) -> Result<(), ChxError> {
                 }
                 _ => {
                     eprintln!("Unknown command: {}", parts[0]);
-                    eprintln!("Type 'help' for available commands.");
+                    println!("Type 'help' for available commands.");
                 }
             }
             Ok(())
         }
         .await;
 
-        if let Err(e) = command_result {
-            eprintln!("Command error: {}. Attempting to reconnect...", e);
+        if let Err(_e) = command_result {
+            dbg_println!("Command error: {}. Attempting to reconnect...", _e);
             client_option = loop {
                 match ChxClient::connect(&current_addr).await {
                     Ok(client) => {
                         println!("Reconnected to Chx server at {}.", current_addr);
                         break Some(client);
                     }
-                    Err(e) => {
-                        eprintln!(
+                    Err(_e) => {
+                        dbg_println!(
                             "Failed to reconnect to {}: {}. Retrying in 3 seconds...",
-                            current_addr, e
+                            current_addr,
+                            _e
                         );
                         tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                     }
